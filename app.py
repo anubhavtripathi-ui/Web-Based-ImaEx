@@ -269,8 +269,19 @@ def to_b64(img_bytes: bytes) -> str:
     return base64.standard_b64encode(img_bytes).decode("utf-8")
 
 
-def extract_numbers(client: anthropic.Anthropic, img_bytes: bytes) -> list[str]:
+def get_media_type(file_name: str) -> str:
+    ext = file_name.lower().split(".")[-1]
+    return {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+    }.get(ext, "image/jpeg")
+
+
+def extract_numbers(client: anthropic.Anthropic, img_bytes: bytes, file_name: str = "image.jpg") -> list[str]:
     """Send image to Claude Vision, extract 10-digit numbers."""
+    media_type = get_media_type(file_name)
     resp = client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=2048,
@@ -281,7 +292,7 @@ def extract_numbers(client: anthropic.Anthropic, img_bytes: bytes) -> list[str]:
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/jpeg",
+                        "media_type": media_type,
                         "data": to_b64(img_bytes)
                     }
                 },
@@ -291,26 +302,29 @@ def extract_numbers(client: anthropic.Anthropic, img_bytes: bytes) -> list[str]:
                         "Examine this image carefully.\n\n"
                         "TASK: Extract every number that is EXACTLY 10 digits long.\n\n"
                         "Rules:\n"
-                        "- Only 10-digit numbers. Ignore 3-4 digit serial/row numbers.\n"
-                        "- Ignore any text (e.g. 'FREE POOL', labels, headings).\n"
+                        "- Only 10-digit numbers. Ignore 3-4 digit serial/row numbers (like 901, 902 etc).\n"
+                        "- Ignore any text (e.g. FREE POOL, labels, headings).\n"
                         "- Read top to bottom.\n"
-                        "- If a digit is genuinely unreadable, use '?' for that digit only.\n"
-                        "- Do NOT guess uncertain digits — use '?' if unsure.\n\n"
-                        "Return ONLY a valid JSON array of strings. No explanation, no markdown.\n"
-                        "Example: [\"8375052028\", \"8375052042\"]\n"
-                        "If none found: []"
+                        "- If a digit is genuinely unreadable, use ? for that digit only.\n"
+                        "- Do NOT guess uncertain digits — use ? if unsure.\n\n"
+                        "Return ONLY a raw JSON array of strings, nothing else. No markdown, no explanation, no code fences.\n"
+                        "Example output: [\"8375052028\", \"8375052042\", \"8375052068\"]\n"
+                        "If none found return exactly: []"
                     )
                 }
             ]
         }]
     )
     raw = resp.content[0].text.strip()
-    match = re.search(r'\[.*?\]', raw, re.DOTALL)
+    # Remove markdown code fences if present
+    raw = re.sub(r"```[a-z]*", "", raw).strip().strip("`").strip()
+    # Extract the JSON array — use greedy match to get the full array
+    match = re.search(r'\[.*\]', raw, re.DOTALL)
     if match:
         try:
             nums = json.loads(match.group())
             # Keep only strings that look like 10-char numbers (digits + possible ?)
-            return [n for n in nums if isinstance(n, str) and re.match(r'^[\d?]{10}$', n)]
+            return [str(n) for n in nums if re.match(r'^[\d?]{10}$', str(n))]
         except json.JSONDecodeError:
             return []
     return []
@@ -427,7 +441,7 @@ if uploaded:
                 unsafe_allow_html=True
             )
             try:
-                nums = extract_numbers(client, file.read())
+                nums = extract_numbers(client, file.read(), file.name)
                 all_numbers.extend(nums)
                 status_slot.markdown(
                     f'<div class="status-msg">✅ <b>{file.name}</b> — {len(nums)} number(s) found</div>',
