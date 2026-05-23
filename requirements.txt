@@ -1,1 +1,10 @@
 
+streamlit
+pandas
+opencv-python-headless
+numpy
+pillow
+easyocr
+openpyxl
+torch
+torchvision
