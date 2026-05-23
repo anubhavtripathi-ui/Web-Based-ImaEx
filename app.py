@@ -1,206 +1,179 @@
+
 import streamlit as st
-import anthropic
-import base64
-import json
+import pandas as pd
+import cv2
+import numpy as np
 import re
-import io
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
+from PIL import Image
+from io import BytesIO
+import easyocr
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+from tempfile import NamedTemporaryFile
 
-st.set_page_config(page_title="ImaEx", page_icon="⚡", layout="centered")
+st.set_page_config(
+    page_title="Web-based ImaEx",
+    page_icon="📷",
+    layout="wide"
+)
 
+# ---------------- UI ---------------- #
 st.markdown("""
 <style>
-.block-container { max-width: 750px !important; padding: 2rem 1.5rem 4rem !important; }
-h1 { text-align: center; font-size: 2rem; }
-.sub { text-align: center; color: #6b7280; font-size: 0.9rem; margin-bottom: 2rem; }
-.stButton > button {
-    background: #2d6a4f !important; color: white !important;
-    border: none !important; border-radius: 10px !important;
-    font-weight: 600 !important; width: 100% !important;
-    padding: 0.7rem !important; font-size: 1rem !important;
+.main {
+    background-color: #0f172a;
 }
-.stDownloadButton > button {
-    background: white !important; color: #2d6a4f !important;
-    border: 2px solid #2d6a4f !important; border-radius: 10px !important;
-    font-weight: 600 !important; width: 100% !important;
-    padding: 0.7rem !important; font-size: 1rem !important;
+.stApp {
+    background: linear-gradient(135deg, #0f172a, #111827);
+    color: white;
 }
-.stTextInput input { font-family: monospace !important; font-size: 0.9rem !important; }
-table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
-th { background: #2d6a4f; color: white; padding: 10px; text-align: center; }
-td { padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
-tr:nth-child(even) { background: #f9fafb; }
-.badge-ok { background: #d1fae5; color: #065f46; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
-.badge-any { background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
-#MainMenu, footer, header { visibility: hidden; }
+.title {
+    font-size: 42px;
+    font-weight: 800;
+    color: #f8fafc;
+}
+.subtitle {
+    color: #cbd5e1;
+    font-size: 18px;
+    margin-bottom: 20px;
+}
+.card {
+    background-color: #1e293b;
+    padding: 20px;
+    border-radius: 18px;
+    margin-bottom: 20px;
+}
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown('<div class="title">📷 Web-based ImaEx</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="subtitle">Upload up to 30 images and extract only 10-digit numbers into Excel.</div>',
+    unsafe_allow_html=True
+)
 
-def digit_sum_single(s):
-    if '?' in s:
-        return "ANY"
-    total = sum(int(d) for d in s if d.isdigit())
-    while total >= 10:
-        total = sum(int(d) for d in str(total))
-    return str(total)
+reader = easyocr.Reader(['en'], gpu=False)
 
+# ---------------- Functions ---------------- #
+def reduce_to_single_digit(num):
+    while num > 9:
+        num = sum(int(d) for d in str(num))
+    return num
 
-def extract_numbers(api_key, img_bytes, filename):
-    ext = filename.lower().rsplit('.', 1)[-1]
-    mtype = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
-             "png": "image/png", "webp": "image/webp"}.get(ext, "image/jpeg")
+def process_image(image_file):
+    image = Image.open(image_file).convert("RGB")
+    img_np = np.array(image)
 
-    client = anthropic.Anthropic(api_key=api_key)
-    b64 = base64.standard_b64encode(img_bytes).decode()
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
 
-    msg = client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=2048,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": mtype, "data": b64}},
-                {"type": "text", "text": (
-                    "This image contains a table/list with multiple columns.\n"
-                    "One column has 10-digit mobile/ID numbers like 8375052028, 8375048954.\n"
-                    "Other columns have short 3-4 digit numbers (901, 902, 976) — IGNORE THOSE.\n"
-                    "Also ignore text like FREE POOL.\n\n"
-                    "Extract ONLY the 10-digit numbers, top to bottom.\n"
-                    "If any digit unclear, use ? in that position.\n\n"
-                    "Reply with ONLY a JSON array, no other text:\n"
-                    '["8375052028","8375052042"]'
-                )}
-            ]
-        }]
+    # Enhance image
+    gray = cv2.GaussianBlur(gray, (3,3), 0)
+    gray = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11,
+        2
     )
 
-    raw = msg.content[0].text.strip()
-    raw = re.sub(r'```\w*', '', raw).strip('`').strip()
-    m = re.search(r'\[.*\]', raw, re.DOTALL)
-    if m:
-        try:
-            nums = json.loads(m.group())
-            return [str(n) for n in nums if re.match(r'^[\d?]{10}$', str(n))]
-        except Exception:
-            return []
-    return []
+    results = reader.readtext(gray, detail=1)
 
+    extracted = []
 
-def build_excel(numbers):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "ImaEx Output"
+    for result in results:
+        text = result[1].strip()
+        confidence = result[2]
 
-    thin = Side(style='thin', color='CCCCCC')
-    bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
-    ctr = Alignment(horizontal='center', vertical='center')
-    lft = Alignment(horizontal='left', vertical='center')
+        cleaned = re.sub(r'\D', '', text)
 
-    hfont = Font(bold=True, color='FFFFFF', size=11)
-    hfill = PatternFill('solid', start_color='2D6A4F')
-    alt = PatternFill('solid', start_color='F0FDF4')
-    anyfill = PatternFill('solid', start_color='FEF2F2')
+        if len(cleaned) == 10:
+            if confidence < 0.70:
+                extracted.append({
+                    "Extracted Number": cleaned,
+                    "Number Sum": "NA"
+                })
+            else:
+                digit_sum = sum(int(x) for x in cleaned)
+                final_sum = reduce_to_single_digit(digit_sum)
 
-    for col, (h, w) in enumerate(zip(["Sr. No.", "10-Digit Number", "Digit Sum (Single)"], [10, 24, 20]), 1):
-        c = ws.cell(row=1, column=col, value=h)
-        c.font = hfont; c.fill = hfill; c.alignment = ctr; c.border = bdr
-        ws.column_dimensions[get_column_letter(col)].width = w
-    ws.row_dimensions[1].height = 28
+                # Double verification
+                digit_sum_2 = sum(int(x) for x in cleaned)
+                final_sum_2 = reduce_to_single_digit(digit_sum_2)
 
-    for i, num in enumerate(numbers, 1):
-        ds = digit_sum_single(num)
-        is_any = ds == "ANY"
-        fill = anyfill if is_any else (alt if i % 2 == 0 else None)
-        fc = 'B91C1C' if is_any else '111827'
-        for col, (val, aln) in enumerate(zip([i, num, ds], [ctr, lft, ctr]), 1):
-            c = ws.cell(row=i+1, column=col, value=val)
-            c.font = Font(size=10, color=fc)
-            c.alignment = aln; c.border = bdr
-            if fill: c.fill = fill
-        ws.row_dimensions[i+1].height = 20
+                if final_sum == final_sum_2:
+                    extracted.append({
+                        "Extracted Number": cleaned,
+                        "Number Sum": final_sum
+                    })
+                else:
+                    extracted.append({
+                        "Extracted Number": cleaned,
+                        "Number Sum": "NA"
+                    })
 
-    ws.freeze_panes = 'A2'
-    buf = io.BytesIO()
-    wb.save(buf); buf.seek(0)
-    return buf
+    return extracted
 
-
-# ── UI ───────────────────────────────────────────────────────────────────────
-
-st.markdown("# ⚡ ImaEx")
-st.markdown('<div class="sub">Image → Extract 10-digit numbers → Excel</div>', unsafe_allow_html=True)
-
-# API Key from secrets only
-try:
-    api_key = st.secrets["ANTHROPIC_API_KEY"]
-except Exception:
-    st.error("⚠️ API key not set. Add ANTHROPIC_API_KEY in Streamlit Cloud → App Settings → Secrets.")
-    st.stop()
-
-# Upload
-uploaded = st.file_uploader(
-    "📁 Upload Images (max 30) — JPG, PNG, WEBP",
-    type=["jpg", "jpeg", "png", "webp"],
+# ---------------- Upload ---------------- #
+uploaded_files = st.file_uploader(
+    "Upload Images (Max 30)",
+    type=["png", "jpg", "jpeg"],
     accept_multiple_files=True
 )
 
-if uploaded and len(uploaded) > 30:
-    st.error("Max 30 images allowed.")
-    st.stop()
+if uploaded_files:
 
-if uploaded:
-    st.info(f"{len(uploaded)} image(s) selected")
+    if len(uploaded_files) > 30:
+        st.error("❌ Maximum 30 images allowed.")
+    else:
 
-    if st.button("⚡ Extract Numbers"):
-        all_numbers = []
-        progress = st.progress(0)
+        all_data = []
+        serial = 1
 
-        for idx, f in enumerate(uploaded):
-            with st.spinner(f"Processing {f.name} ({idx+1}/{len(uploaded)})..."):
-                try:
-                    nums = extract_numbers(api_key.strip(), f.read(), f.name)
-                    all_numbers.extend(nums)
-                    st.success(f"✅ {f.name} → {len(nums)} numbers found")
-                except Exception as e:
-                    st.error(f"❌ {f.name} → Error: {e}")
-            progress.progress((idx + 1) / len(uploaded))
+        with st.spinner("Processing images..."):
+            for file in uploaded_files:
+                data = process_image(file)
 
-        progress.empty()
+                for row in data:
+                    all_data.append({
+                        "S.No": serial,
+                        "Extracted Number": row["Extracted Number"],
+                        "Number Sum": row["Number Sum"]
+                    })
+                    serial += 1
 
-        if not all_numbers:
-            st.warning("No 10-digit numbers found. Check image quality or API key.")
-            st.stop()
+        if len(all_data) == 0:
+            st.warning("No valid 10-digit numbers detected.")
+        else:
 
-        any_c = sum(1 for n in all_numbers if '?' in n)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total", len(all_numbers))
-        c2.metric("Clean", len(all_numbers) - any_c)
-        c3.metric("Unclear", any_c)
+            df = pd.DataFrame(all_data)
 
-        st.markdown("### Preview (first 15 rows)")
-        rows = ""
-        for i, num in enumerate(all_numbers[:15], 1):
-            ds = digit_sum_single(num)
-            badge = f'<span class="badge-any">ANY</span>' if ds == "ANY" else f'<span class="badge-ok">{ds}</span>'
-            rows += f"<tr><td style='text-align:center'>{i}</td><td style='font-family:monospace'>{num}</td><td style='text-align:center'>{badge}</td></tr>"
+            st.success(f"✅ Extraction completed. {len(df)} records found.")
 
-        st.markdown(f"""
-        <table>
-          <thead><tr><th>Sr. No.</th><th>10-Digit Number</th><th>Digit Sum</th></tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
-        """, unsafe_allow_html=True)
+            st.dataframe(df, use_container_width=True)
 
-        if len(all_numbers) > 15:
-            st.caption(f"... and {len(all_numbers)-15} more rows in the Excel file.")
+            # Excel creation
+            output = BytesIO()
 
-        st.markdown("---")
-        st.download_button(
-            "📥 Download Excel",
-            data=build_excel(all_numbers),
-            file_name="imaex_output.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='ImaEx_Output')
+
+                ws = writer.book['ImaEx_Output']
+
+                for cell in ws[1]:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(
+                        start_color="1E293B",
+                        end_color="1E293B",
+                        fill_type="solid"
+                    )
+
+                for column_cells in ws.columns:
+                    length = max(len(str(cell.value)) if cell.value else 0 for cell in column_cells)
+                    ws.column_dimensions[column_cells[0].column_letter].width = length + 5
+
+            st.download_button(
+                label="⬇ Download Excel",
+                data=output.getvalue(),
+                file_name="ImaEx_Output.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
