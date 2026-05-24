@@ -8,63 +8,130 @@ from io import BytesIO
 from paddleocr import PaddleOCR
 from openpyxl.styles import Font, PatternFill
 
-st.set_page_config(page_title="ImaEx", page_icon="⚡", layout="wide")
+# ---------------- PAGE CONFIG ---------------- #
+
+st.set_page_config(
+    page_title="ImaEx",
+    page_icon="⚡",
+    layout="wide"
+)
+
+# ---------------- UI ---------------- #
 
 st.markdown("""
 <style>
+
 header {visibility:hidden;}
 #MainMenu {visibility:hidden;}
 footer {visibility:hidden;}
-.stApp{background:#eef2f7;}
-.stDownloadButton > button{
-width:100%;
-background:linear-gradient(90deg,#ff9966,#ff5e62);
-color:white;
-border:none;
-border-radius:12px;
-padding:14px;
-font-size:18px;
-font-weight:700;
+
+.stApp{
+    background:#eef2f7;
 }
+
+.main-box{
+    background:white;
+    border-radius:28px;
+    padding:40px;
+    box-shadow:0 6px 24px rgba(0,0,0,0.06);
+}
+
+.title-row{
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:14px;
+}
+
+.title{
+    font-size:62px;
+    font-weight:800;
+    color:#1f2937;
+}
+
+.subtitle{
+    text-align:center;
+    color:#6b7280;
+    font-size:22px;
+    margin-top:10px;
+    margin-bottom:30px;
+}
+
+.stDownloadButton > button{
+    width:100%;
+    background:linear-gradient(90deg,#ff9966,#ff5e62);
+    color:white;
+    border:none;
+    border-radius:14px;
+    padding:15px;
+    font-size:18px;
+    font-weight:700;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown('<div class="main-box">', unsafe_allow_html=True)
+
 st.markdown("""
-<div style='background:white;padding:35px;border-radius:24px;'>
-<div style='display:flex;justify-content:center;align-items:center;gap:12px;'>
-<div style='font-size:50px;'>⚡</div>
-<div style='font-size:56px;font-weight:800;'>ImaEx</div>
-</div>
-<div style='text-align:center;color:#6b7280;font-size:18px;margin-top:10px;'>
-Advanced 10-digit Number Extraction
-</div>
+<div class="title-row">
+<div style="font-size:52px;">⚡</div>
+<div class="title">ImaEx</div>
 </div>
 """, unsafe_allow_html=True)
 
+st.markdown(
+    '<div class="subtitle">Advanced 10-digit Number Extraction</div>',
+    unsafe_allow_html=True
+)
+
+# ---------------- OCR ENGINE ---------------- #
+
 ocr = PaddleOCR(lang='en')
 
+# ---------------- HELPERS ---------------- #
+
 def reduce_single(num):
+
     while num > 9:
         num = sum(int(x) for x in str(num))
+
     return num
 
+
 def calculate_sum(number):
+
     try:
         total = sum(int(x) for x in number)
         return reduce_single(total)
+
     except:
         return "NA"
 
+
 def validate_number(num):
+
     if len(num) != 10:
         return False
-    if not num.startswith(("6","7","8","9")):
+
+    if not num.startswith(("6", "7", "8", "9")):
         return False
+
     return True
 
+
 def preprocess(img):
+
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    gray = cv2.resize(
+        gray,
+        None,
+        fx=2,
+        fy=2,
+        interpolation=cv2.INTER_CUBIC
+    )
+
     blur = cv2.GaussianBlur(gray, (3,3), 0)
 
     thresh = cv2.adaptiveThreshold(
@@ -78,9 +145,13 @@ def preprocess(img):
 
     return thresh
 
+
+# ---------------- EXTRACTION ---------------- #
+
 def extract_numbers(file):
 
     image = Image.open(file).convert("RGB")
+
     img_np = np.array(image)
 
     processed = preprocess(img_np)
@@ -89,21 +160,27 @@ def extract_numbers(file):
 
     final_rows = []
 
-    if result:
+    full_text = ""
 
-        full_text = ""
+    try:
 
-        for line in result:
+        if result:
 
-            if line:
+            for page in result:
 
-                for item in line:
+                if not page:
+                    continue
+
+                for line in page:
 
                     try:
-                        txt = item[1][0]
-                        full_text += " " + txt
+
+                        txt = line[1][0]
+
+                        full_text += " " + str(txt)
+
                     except:
-                        pass
+                        continue
 
         matches = re.findall(r'\d+', full_text)
 
@@ -114,8 +191,11 @@ def extract_numbers(file):
             cleaned = re.sub(r'\D', '', raw)
 
             if len(cleaned) > 10:
+
                 chunks = re.findall(r'\d{10}', cleaned)
+
             else:
+
                 chunks = [cleaned]
 
             for number in chunks:
@@ -143,17 +223,30 @@ def extract_numbers(file):
                             "Number Sum": "NA"
                         })
 
+    except Exception as e:
+
+        final_rows.append({
+            "Extracted Number": "OCR_ERROR",
+            "Number Sum": "NA"
+        })
+
     return final_rows
+
+
+# ---------------- FILE UPLOAD ---------------- #
 
 uploaded_files = st.file_uploader(
     "Upload Images",
-    type=["jpg","jpeg","png","webp"],
+    type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True
 )
+
+# ---------------- MAIN PROCESS ---------------- #
 
 if uploaded_files:
 
     if len(uploaded_files) > 30:
+
         st.error("Maximum 30 images allowed")
 
     else:
@@ -168,7 +261,9 @@ if uploaded_files:
 
         for idx, file in enumerate(uploaded_files):
 
-            status.info(f"Processing image {idx+1} of {len(uploaded_files)}")
+            status.info(
+                f"Processing image {idx+1} of {len(uploaded_files)}"
+            )
 
             rows = extract_numbers(file)
 
@@ -182,25 +277,42 @@ if uploaded_files:
 
                 serial += 1
 
-            progress.progress((idx+1)/len(uploaded_files))
+            progress.progress((idx + 1) / len(uploaded_files))
 
         status.success("Processing Completed")
 
         if len(all_rows) == 0:
 
-            st.warning("No valid records detected")
+            st.warning("No valid numbers detected")
 
         else:
 
             df = pd.DataFrame(all_rows)
 
-            st.success(f"Successfully extracted {len(df)} records")
+            st.success(
+                f"Successfully extracted {len(df)} records"
+            )
 
             st.dataframe(df, use_container_width=True)
 
+            # ---------------- SUMMARY ---------------- #
+
+            st.markdown("### 📊 Summary")
+
+            st.write(f"Total Records: {len(df)}")
+
+            st.write(
+                f"NA Records: {len(df[df['Number Sum'] == 'NA'])}"
+            )
+
+            # ---------------- EXCEL EXPORT ---------------- #
+
             output = BytesIO()
 
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            with pd.ExcelWriter(
+                output,
+                engine='openpyxl'
+            ) as writer:
 
                 df.to_excel(
                     writer,
@@ -225,9 +337,24 @@ if uploaded_files:
 
                     cell.fill = fill
 
+                # AUTO WIDTH
+
+                for column_cells in ws.columns:
+
+                    length = max(
+                        len(str(cell.value)) if cell.value else 0
+                        for cell in column_cells
+                    )
+
+                    ws.column_dimensions[
+                        column_cells[0].column_letter
+                    ].width = length + 6
+
             st.download_button(
                 label="⬇ Download Excel File",
                 data=output.getvalue(),
                 file_name="ImaEx_Output.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+
+st.markdown('</div>', unsafe_allow_html=True)
