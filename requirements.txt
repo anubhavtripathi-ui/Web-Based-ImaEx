@@ -1,8 +1,5 @@
 streamlit
 pandas
-numpy
+anthropic
 pillow
 openpyxl
-opencv-python-headless==4.10.0.84
-paddleocr
-paddlepaddle
