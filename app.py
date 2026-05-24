@@ -6,87 +6,53 @@ import numpy as np
 import re
 from PIL import Image
 from io import BytesIO
-import easyocr
+import pytesseract
 from openpyxl.styles import Font, PatternFill
 
-st.set_page_config(
-    page_title="ImaEx",
-    page_icon="⚡",
-    layout="centered"
-)
+st.set_page_config(page_title="ImaEx", page_icon="⚡", layout="centered")
 
 # ---------------- UI ---------------- #
 st.markdown("""
 <style>
 
-html, body, [class*="css"] {
-    font-family: 'Segoe UI', sans-serif;
-}
-
 .stApp {
     background: #eef2f7;
 }
 
-.main-container {
+.block-container {
+    padding-top: 2rem;
+}
+
+.main-box {
     background: white;
-    border-radius: 28px;
-    padding: 45px;
-    margin-top: 20px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.06);
+    border-radius: 24px;
+    padding: 40px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.05);
 }
 
 .logo {
     text-align:center;
-    font-size:60px;
-    margin-bottom:0px;
+    font-size:70px;
 }
 
 .title {
     text-align:center;
-    font-size:58px;
+    font-size:56px;
     font-weight:800;
     color:#1f2937;
-    margin-top:-10px;
 }
 
 .subtitle {
     text-align:center;
     color:#6b7280;
-    font-size:22px;
-    margin-top:5px;
+    font-size:20px;
     margin-bottom:35px;
-}
-
-.upload-box {
-    background:#f8fafc;
-    border:2px dashed #d1d5db;
-    border-radius:20px;
-    padding:25px;
-}
-
-.summary-card {
-    background:#f8fafc;
-    border-radius:18px;
-    padding:20px;
-    margin-top:20px;
-    border:1px solid #e5e7eb;
-}
-
-.stDownloadButton > button {
-    width:100%;
-    background: linear-gradient(90deg, #ff9966, #ff5e62);
-    color:white;
-    border:none;
-    padding:16px;
-    border-radius:14px;
-    font-size:18px;
-    font-weight:700;
 }
 
 .stFileUploader {
     background:#f8fafc;
-    padding:20px;
-    border-radius:20px;
+    border-radius:18px;
+    padding:18px;
     border:2px dashed #cbd5e1;
 }
 
@@ -96,22 +62,41 @@ html, body, [class*="css"] {
     padding:25px;
 }
 
+.processing-text {
+    color:#111827;
+    font-size:18px;
+    font-weight:600;
+}
+
+.summary-box {
+    background:#f8fafc;
+    border-radius:16px;
+    padding:20px;
+    border:1px solid #e5e7eb;
+}
+
+.stDownloadButton > button {
+    width:100%;
+    background: linear-gradient(90deg,#ff9966,#ff5e62);
+    color:white;
+    border:none;
+    border-radius:14px;
+    padding:16px;
+    font-size:18px;
+    font-weight:700;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-container">', unsafe_allow_html=True)
+st.markdown('<div class="main-box">', unsafe_allow_html=True)
 
 st.markdown('<div class="logo">⚡</div>', unsafe_allow_html=True)
 st.markdown('<div class="title">ImaEx</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="subtitle">Image → Extract 10-digit numbers → Excel</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="subtitle">Image → Extract 10-digit numbers → Excel</div>', unsafe_allow_html=True)
 
 st.markdown("### 📁 Upload Images")
 st.caption("Upload up to 30 JPG / PNG / WEBP images")
-
-reader = easyocr.Reader(['en'], gpu=False)
 
 # ---------------- FUNCTIONS ---------------- #
 
@@ -121,17 +106,16 @@ def reduce_to_single_digit(num):
     return num
 
 def calculate_sum(number):
-
     try:
-        total_1 = sum(int(x) for x in number)
-        final_1 = reduce_to_single_digit(total_1)
+        total = sum(int(x) for x in number)
+        final = reduce_to_single_digit(total)
 
-        total_2 = sum(int(x) for x in number)
-        final_2 = reduce_to_single_digit(total_2)
+        # double verification
+        total2 = sum(int(x) for x in number)
+        final2 = reduce_to_single_digit(total2)
 
-        if final_1 == final_2:
-            return final_1
-
+        if final == final2:
+            return final
         return "NA"
 
     except:
@@ -141,19 +125,15 @@ def preprocess_image(img_np):
 
     gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
 
-    # upscale
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    # denoise
     gray = cv2.fastNlMeansDenoising(gray)
 
-    # sharpen
     kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
-    gray = cv2.filter2D(gray, -1, kernel)
+    sharp = cv2.filter2D(gray, -1, kernel)
 
-    # adaptive threshold
     thresh = cv2.adaptiveThreshold(
-        gray,
+        sharp,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
@@ -170,41 +150,33 @@ def extract_numbers(image_file):
 
     processed = preprocess_image(img_np)
 
-    results = reader.readtext(
+    text = pytesseract.image_to_string(
         processed,
-        detail=1,
-        paragraph=False
+        config='--psm 6'
     )
+
+    found = re.findall(r'\b\d{10}\b', text)
 
     extracted = []
 
-    for item in results:
+    for number in found:
 
-        text = item[1].strip()
-        confidence = item[2]
+        if len(number) == 10:
 
-        cleaned = re.sub(r'\D', '', text)
-
-        # only 10 digit focus
-        if len(cleaned) == 10:
-
-            if confidence < 0.58:
-                number_sum = "NA"
-            else:
-                number_sum = calculate_sum(cleaned)
+            number_sum = calculate_sum(number)
 
             extracted.append({
-                "Extracted Number": cleaned,
+                "Extracted Number": number,
                 "Number Sum": number_sum
             })
 
     return extracted
 
-# ---------------- UPLOADER ---------------- #
+# ---------------- UPLOAD ---------------- #
 
 uploaded_files = st.file_uploader(
     " ",
-    type=["jpg", "jpeg", "png", "webp"],
+    type=["jpg","jpeg","png","webp"],
     accept_multiple_files=True
 )
 
@@ -212,7 +184,7 @@ if uploaded_files:
 
     if len(uploaded_files) > 30:
 
-        st.error("Maximum 30 images allowed.")
+        st.error("Maximum 30 images allowed")
 
     else:
 
@@ -221,7 +193,14 @@ if uploaded_files:
 
         progress = st.progress(0)
 
+        status_text = st.empty()
+
         for idx, file in enumerate(uploaded_files):
+
+            status_text.markdown(
+                f'<div class="processing-text">⚙ Processing Image {idx+1} of {len(uploaded_files)}...</div>',
+                unsafe_allow_html=True
+            )
 
             data = extract_numbers(file)
 
@@ -237,29 +216,33 @@ if uploaded_files:
 
             progress.progress((idx + 1) / len(uploaded_files))
 
+        status_text.markdown(
+            '<div class="processing-text">✅ Processing Completed</div>',
+            unsafe_allow_html=True
+        )
+
         if len(all_rows) == 0:
 
-            st.warning("No valid 10-digit numbers detected.")
+            st.warning("No valid 10-digit numbers detected")
 
         else:
 
             df = pd.DataFrame(all_rows)
 
-            st.success(f"✅ Extraction completed successfully — {len(df)} numbers found")
+            st.success(f"Successfully extracted {len(df)} numbers")
 
             st.dataframe(df, use_container_width=True)
 
-            # summary
             total_records = len(df)
-            valid_records = len(df[df["Number Sum"] != "NA"])
             na_records = len(df[df["Number Sum"] == "NA"])
+            valid_records = total_records - na_records
 
-            st.markdown('<div class="summary-card">', unsafe_allow_html=True)
+            st.markdown('<div class="summary-box">', unsafe_allow_html=True)
 
             st.markdown("### 📊 Summary")
-            st.write(f"• Total Numbers Extracted: {total_records}")
+            st.write(f"• Total Extracted Numbers: {total_records}")
             st.write(f"• Successfully Processed: {valid_records}")
-            st.write(f"• NA / Low Confidence: {na_records}")
+            st.write(f"• NA Records: {na_records}")
 
             st.markdown('</div>', unsafe_allow_html=True)
 
