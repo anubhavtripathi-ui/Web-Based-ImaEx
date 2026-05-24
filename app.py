@@ -41,7 +41,7 @@ Advanced 10-digit Number Extraction
 </div>
 """, unsafe_allow_html=True)
 
-ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+ocr = PaddleOCR(lang='en')
 
 def reduce_single(num):
     while num > 9:
