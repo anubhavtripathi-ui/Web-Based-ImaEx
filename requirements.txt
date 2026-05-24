@@ -5,5 +5,5 @@ numpy
 pillow
 easyocr
 openpyxl
-torch
-torchvision
+torch==2.7.0
+torchvision==0.22.0
