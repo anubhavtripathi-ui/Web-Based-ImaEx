@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-import anthropic
 import base64
 import json
 import re
 import os
+from google import genai
+from google.genai import types
 from PIL import Image
 from io import BytesIO
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -43,6 +44,8 @@ Advanced 10-digit Number Extraction · AI-Powered OCR
 """, unsafe_allow_html=True)
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def reduce_to_single(num):
     while num > 9:
         num = sum(int(d) for d in str(num))
@@ -58,6 +61,36 @@ def calculate_sum(number_str):
 def validate_mobile(num):
     return len(num) == 10 and num[0] in "6789" and num.isdigit()
 
+def parse_response(raw_text):
+    raw_text = raw_text.strip()
+    if raw_text.startswith("```"):
+        raw_text = "\n".join(raw_text.split("\n")[1:])
+    if raw_text.endswith("```"):
+        raw_text = "\n".join(raw_text.split("\n")[:-1])
+    try:
+        numbers_list = json.loads(raw_text)
+    except Exception:
+        found = re.findall(r"[6-9]\d{9}", raw_text)
+        return [{"number": n, "valid": True} for n in dict.fromkeys(found)]
+
+    rows = []
+    for item in numbers_list:
+        item = str(item).strip()
+        if item.upper() == "N" or not item:
+            rows.append({"number": "N", "valid": False})
+        else:
+            cleaned = re.sub(r"\D", "", item)
+            if validate_mobile(cleaned):
+                rows.append({"number": cleaned, "valid": True})
+            elif len(cleaned) > 10:
+                match = re.search(r"[6-9]\d{9}", cleaned)
+                rows.append({"number": match.group() if match else "N", "valid": bool(match)})
+            elif len(cleaned) >= 8:
+                rows.append({"number": "N", "valid": False})
+    return rows
+
+
+# ── Gemini OCR ────────────────────────────────────────────────────────────────
 
 OCR_PROMPT = """This image shows a table/list of 10-digit Indian mobile phone numbers on a screen.
 Each row has a serial number, a 10-digit phone number (starting with 6, 7, 8, or 9), and "FREE POOL".
@@ -79,55 +112,27 @@ def extract_numbers_from_image(client, image_file):
     image_file.seek(0)
 
     suffix = image_file.name.lower().rsplit(".", 1)[-1]
-    media_type_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
-                      "png": "image/png", "webp": "image/webp"}
-    media_type = media_type_map.get(suffix, "image/jpeg")
-    b64_data = base64.standard_b64encode(image_bytes).decode("utf-8")
+    mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "png": "image/png", "webp": "image/webp"}
+    mime_type = mime_map.get(suffix, "image/jpeg")
 
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_data}},
-                    {"type": "text", "text": OCR_PROMPT}
-                ]
-            }]
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                OCR_PROMPT
+            ]
         )
+        raw_text = response.text
+        return parse_response(raw_text)
 
-        raw_text = message.content[0].text.strip()
-        raw_text = re.sub(r"^```[a-z]*\n?", "", raw_text)
-        raw_text = re.sub(r"\n?```$", "", raw_text)
-
-        numbers_list = json.loads(raw_text)
-        rows = []
-        for item in numbers_list:
-            item = str(item).strip()
-            if item.upper() == "N" or not item:
-                rows.append({"number": "N", "valid": False})
-            else:
-                cleaned = re.sub(r"\D", "", item)
-                if validate_mobile(cleaned):
-                    rows.append({"number": cleaned, "valid": True})
-                elif len(cleaned) > 10:
-                    match = re.search(r"[6-9]\d{9}", cleaned)
-                    if match:
-                        rows.append({"number": match.group(), "valid": True})
-                    else:
-                        rows.append({"number": "N", "valid": False})
-                elif len(cleaned) >= 8:
-                    rows.append({"number": "N", "valid": False})
-        return rows
-
-    except json.JSONDecodeError:
-        found = re.findall(r"[6-9]\d{9}", raw_text)
-        return [{"number": n, "valid": True} for n in dict.fromkeys(found)]
     except Exception as e:
         st.error(f"Error processing {image_file.name}: {e}")
         return []
 
+
+# ── Excel builder ─────────────────────────────────────────────────────────────
 
 def build_excel(df):
     output = BytesIO()
@@ -165,12 +170,12 @@ def build_excel(df):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+api_key = os.environ.get("GOOGLE_API_KEY", "")
 if not api_key:
-    st.error("ANTHROPIC_API_KEY environment variable not set. Please add it to your secrets.")
+    st.error("GOOGLE_API_KEY environment variable not set. Please add it to Streamlit Secrets.")
     st.stop()
 
-client = anthropic.Anthropic(api_key=api_key)
+client = genai.Client(api_key=api_key)
 
 uploaded_files = st.file_uploader(
     "Upload Images (photos of number lists)",
