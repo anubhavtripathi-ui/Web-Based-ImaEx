@@ -5,120 +5,43 @@ import numpy as np
 import re
 from PIL import Image
 from io import BytesIO
-from rapidocr_onnxruntime import RapidOCR
+from paddleocr import PaddleOCR
 from openpyxl.styles import Font, PatternFill
 
-st.set_page_config(
-    page_title="ImaEx",
-    page_icon="⚡",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
-
-# ---------------- UI ---------------- #
+st.set_page_config(page_title="ImaEx", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
-
 header {visibility:hidden;}
 #MainMenu {visibility:hidden;}
 footer {visibility:hidden;}
-
-.stApp{
-    background:#eef2f7;
-}
-
-.block-container{
-    padding-top:1rem;
-}
-
-.main-box{
-    background:white;
-    border-radius:24px;
-    padding:40px;
-    box-shadow:0 6px 24px rgba(0,0,0,0.05);
-}
-
-.logo-row{
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    gap:12px;
-}
-
-.logo{
-    font-size:48px;
-}
-
-.title{
-    font-size:58px;
-    font-weight:800;
-    color:#1f2937;
-}
-
-.subtitle{
-    text-align:center;
-    color:#6b7280;
-    font-size:20px;
-    margin-top:10px;
-    margin-bottom:35px;
-}
-
-.stFileUploader{
-    background:#f8fafc;
-    border:2px dashed #cbd5e1;
-    border-radius:18px;
-    padding:18px;
-}
-
-.processing{
-    color:#111827;
-    font-size:18px;
-    font-weight:700;
-}
-
-.summary{
-    background:#f8fafc;
-    border:1px solid #e5e7eb;
-    border-radius:16px;
-    padding:18px;
-    margin-top:20px;
-}
-
+.stApp{background:#eef2f7;}
 .stDownloadButton > button{
-    width:100%;
-    background:linear-gradient(90deg,#ff9966,#ff5e62);
-    color:white;
-    border:none;
-    border-radius:14px;
-    padding:15px;
-    font-size:18px;
-    font-weight:700;
+width:100%;
+background:linear-gradient(90deg,#ff9966,#ff5e62);
+color:white;
+border:none;
+border-radius:12px;
+padding:14px;
+font-size:18px;
+font-weight:700;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-box">', unsafe_allow_html=True)
-
 st.markdown("""
-<div class="logo-row">
-<div class="logo">⚡</div>
-<div class="title">ImaEx</div>
+<div style='background:white;padding:35px;border-radius:24px;'>
+<div style='display:flex;justify-content:center;align-items:center;gap:12px;'>
+<div style='font-size:50px;'>⚡</div>
+<div style='font-size:56px;font-weight:800;'>ImaEx</div>
+</div>
+<div style='text-align:center;color:#6b7280;font-size:18px;margin-top:10px;'>
+Advanced 10-digit Number Extraction
+</div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="subtitle">Image → Extract 10-digit numbers → Excel</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown("### 📁 Upload Images")
-st.caption("Upload up to 30 JPG / PNG / WEBP images")
-
-# ---------------- OCR ---------------- #
-
-reader = RapidOCR()
+ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
 
 def reduce_single(num):
     while num > 9:
@@ -132,35 +55,25 @@ def calculate_sum(number):
     except:
         return "NA"
 
-def preprocess(img_np):
+def validate_number(num):
+    if len(num) != 10:
+        return False
+    if not num.startswith(("6","7","8","9")):
+        return False
+    return True
 
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-
-    gray = cv2.resize(
-        gray,
-        None,
-        fx=2,
-        fy=2,
-        interpolation=cv2.INTER_CUBIC
-    )
-
-    gray = cv2.fastNlMeansDenoising(gray)
-
-    kernel = np.array([
-        [0,-1,0],
-        [-1,5,-1],
-        [0,-1,0]
-    ])
-
-    sharp = cv2.filter2D(gray, -1, kernel)
+def preprocess(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    blur = cv2.GaussianBlur(gray, (3,3), 0)
 
     thresh = cv2.adaptiveThreshold(
-        sharp,
+        blur,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
-        11,
-        2
+        15,
+        8
     )
 
     return thresh
@@ -168,44 +81,72 @@ def preprocess(img_np):
 def extract_numbers(file):
 
     image = Image.open(file).convert("RGB")
-
     img_np = np.array(image)
 
     processed = preprocess(img_np)
 
-    results, _ = reader(processed)
+    result = ocr.ocr(processed, cls=True)
 
-    extracted = []
+    final_rows = []
 
-    if results:
+    if result:
 
-        # FULL TEXT BUILD
-        all_text = " ".join([item[1] for item in results])
+        full_text = ""
 
-        # FIND ALL 10 DIGIT NUMBERS
-        numbers = re.findall(r'\d{10}', all_text)
+        for line in result:
 
-        # REMOVE DUPLICATES
-        numbers = list(dict.fromkeys(numbers))
+            if line:
 
-        for cleaned in numbers:
+                for item in line:
 
-            try:
-                number_sum = calculate_sum(cleaned)
-            except:
-                number_sum = "NA"
+                    try:
+                        txt = item[1][0]
+                        full_text += " " + txt
+                    except:
+                        pass
 
-            extracted.append({
-                "Extracted Number": cleaned,
-                "Number Sum": number_sum
-            })
+        matches = re.findall(r'\d+', full_text)
 
-    return extracted
+        seen = set()
 
-# ---------------- UPLOAD ---------------- #
+        for raw in matches:
+
+            cleaned = re.sub(r'\D', '', raw)
+
+            if len(cleaned) > 10:
+                chunks = re.findall(r'\d{10}', cleaned)
+            else:
+                chunks = [cleaned]
+
+            for number in chunks:
+
+                if number in seen:
+                    continue
+
+                seen.add(number)
+
+                if validate_number(number):
+
+                    number_sum = calculate_sum(number)
+
+                    final_rows.append({
+                        "Extracted Number": number,
+                        "Number Sum": number_sum
+                    })
+
+                else:
+
+                    if len(number) >= 8:
+
+                        final_rows.append({
+                            "Extracted Number": number,
+                            "Number Sum": "NA"
+                        })
+
+    return final_rows
 
 uploaded_files = st.file_uploader(
-    " ",
+    "Upload Images",
     type=["jpg","jpeg","png","webp"],
     accept_multiple_files=True
 )
@@ -213,7 +154,6 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
 
     if len(uploaded_files) > 30:
-
         st.error("Maximum 30 images allowed")
 
     else:
@@ -228,10 +168,7 @@ if uploaded_files:
 
         for idx, file in enumerate(uploaded_files):
 
-            status.markdown(
-                f'<div class="processing">⚙ Processing image {idx+1} of {len(uploaded_files)}...</div>',
-                unsafe_allow_html=True
-            )
+            status.info(f"Processing image {idx+1} of {len(uploaded_files)}")
 
             rows = extract_numbers(file)
 
@@ -245,34 +182,21 @@ if uploaded_files:
 
                 serial += 1
 
-            progress.progress((idx + 1) / len(uploaded_files))
+            progress.progress((idx+1)/len(uploaded_files))
 
-        status.markdown(
-            '<div class="processing">✅ Processing Completed</div>',
-            unsafe_allow_html=True
-        )
+        status.success("Processing Completed")
 
         if len(all_rows) == 0:
 
-            st.warning("No valid 10-digit numbers detected")
+            st.warning("No valid records detected")
 
         else:
 
             df = pd.DataFrame(all_rows)
 
-            st.success(f"Successfully extracted {len(df)} numbers")
+            st.success(f"Successfully extracted {len(df)} records")
 
             st.dataframe(df, use_container_width=True)
-
-            st.markdown('<div class="summary">', unsafe_allow_html=True)
-
-            st.markdown("### 📊 Summary")
-
-            st.write(f"• Total Numbers: {len(df)}")
-            st.write(f"• Successfully Processed: {len(df[df['Number Sum'] != 'NA'])}")
-            st.write(f"• NA Records: {len(df[df['Number Sum'] == 'NA'])}")
-
-            st.markdown('</div>', unsafe_allow_html=True)
 
             output = BytesIO()
 
@@ -293,21 +217,13 @@ if uploaded_files:
                 )
 
                 for cell in ws[1]:
+
                     cell.font = Font(
                         bold=True,
                         color="FFFFFF"
                     )
+
                     cell.fill = fill
-
-                for column_cells in ws.columns:
-                    length = max(
-                        len(str(cell.value)) if cell.value else 0
-                        for cell in column_cells
-                    )
-
-                    ws.column_dimensions[
-                        column_cells[0].column_letter
-                    ].width = length + 6
 
             st.download_button(
                 label="⬇ Download Excel File",
@@ -315,5 +231,3 @@ if uploaded_files:
                 file_name="ImaEx_Output.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-
-st.markdown('</div>', unsafe_allow_html=True)
