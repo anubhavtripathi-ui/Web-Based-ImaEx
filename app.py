@@ -85,7 +85,7 @@ def extract_numbers(file):
 
     processed = preprocess(img_np)
 
-    result = ocr.ocr(processed, cls=True)
+    result = ocr.ocr(processed)
 
     final_rows = []
 
