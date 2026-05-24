@@ -5,7 +5,7 @@ import numpy as np
 import re
 from PIL import Image
 from io import BytesIO
-import easyocr
+from rapidocr_onnxruntime import RapidOCR
 from openpyxl.styles import Font, PatternFill
 
 st.set_page_config(
@@ -15,8 +15,11 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ---------------- UI ---------------- #
+
 st.markdown("""
 <style>
+
 header {visibility:hidden;}
 #MainMenu {visibility:hidden;}
 footer {visibility:hidden;}
@@ -92,6 +95,7 @@ footer {visibility:hidden;}
     font-size:18px;
     font-weight:700;
 }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -112,7 +116,9 @@ st.markdown(
 st.markdown("### 📁 Upload Images")
 st.caption("Upload up to 30 JPG / PNG / WEBP images")
 
-reader = easyocr.Reader(['en'], gpu=False)
+# ---------------- OCR ---------------- #
+
+reader = RapidOCR()
 
 def reduce_single(num):
     while num > 9:
@@ -120,15 +126,32 @@ def reduce_single(num):
     return num
 
 def calculate_sum(number):
-    total = sum(int(x) for x in number)
-    return reduce_single(total)
+    try:
+        total = sum(int(x) for x in number)
+        return reduce_single(total)
+    except:
+        return "NA"
 
 def preprocess(img_np):
+
     gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    gray = cv2.resize(
+        gray,
+        None,
+        fx=2,
+        fy=2,
+        interpolation=cv2.INTER_CUBIC
+    )
+
     gray = cv2.fastNlMeansDenoising(gray)
 
-    kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
+    kernel = np.array([
+        [0,-1,0],
+        [-1,5,-1],
+        [0,-1,0]
+    ])
+
     sharp = cv2.filter2D(gray, -1, kernel)
 
     thresh = cv2.adaptiveThreshold(
@@ -139,34 +162,45 @@ def preprocess(img_np):
         11,
         2
     )
+
     return thresh
 
 def extract_numbers(file):
+
     image = Image.open(file).convert("RGB")
+
     img_np = np.array(image)
 
     processed = preprocess(img_np)
 
-    results = reader.readtext(processed, detail=1)
+    results, _ = reader(processed)
 
-    data = []
+    extracted = []
 
-    for item in results:
-        text = item[1]
-        cleaned = re.sub(r'\D', '', text)
+    if results:
 
-        if len(cleaned) == 10:
+        for item in results:
+
             try:
-                number_sum = calculate_sum(cleaned)
+                text = item[1]
+
+                cleaned = re.sub(r'\D', '', text)
+
+                if len(cleaned) == 10:
+
+                    number_sum = calculate_sum(cleaned)
+
+                    extracted.append({
+                        "Extracted Number": cleaned,
+                        "Number Sum": number_sum
+                    })
+
             except:
-                number_sum = "NA"
+                pass
 
-            data.append({
-                "Extracted Number": cleaned,
-                "Number Sum": number_sum
-            })
+    return extracted
 
-    return data
+# ---------------- UPLOAD ---------------- #
 
 uploaded_files = st.file_uploader(
     " ",
@@ -177,14 +211,17 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
 
     if len(uploaded_files) > 30:
+
         st.error("Maximum 30 images allowed")
 
     else:
 
         progress = st.progress(0)
+
         status = st.empty()
 
         all_rows = []
+
         serial = 1
 
         for idx, file in enumerate(uploaded_files):
@@ -197,14 +234,16 @@ if uploaded_files:
             rows = extract_numbers(file)
 
             for row in rows:
+
                 all_rows.append({
                     "S.No": serial,
                     "Extracted Number": row["Extracted Number"],
                     "Number Sum": row["Number Sum"]
                 })
+
                 serial += 1
 
-            progress.progress((idx+1)/len(uploaded_files))
+            progress.progress((idx + 1) / len(uploaded_files))
 
         status.markdown(
             '<div class="processing">✅ Processing Completed</div>',
@@ -212,7 +251,9 @@ if uploaded_files:
         )
 
         if len(all_rows) == 0:
+
             st.warning("No valid 10-digit numbers detected")
+
         else:
 
             df = pd.DataFrame(all_rows)
@@ -222,16 +263,24 @@ if uploaded_files:
             st.dataframe(df, use_container_width=True)
 
             st.markdown('<div class="summary">', unsafe_allow_html=True)
+
             st.markdown("### 📊 Summary")
+
             st.write(f"• Total Numbers: {len(df)}")
             st.write(f"• Successfully Processed: {len(df[df['Number Sum'] != 'NA'])}")
             st.write(f"• NA Records: {len(df[df['Number Sum'] == 'NA'])}")
+
             st.markdown('</div>', unsafe_allow_html=True)
 
             output = BytesIO()
 
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='ImaEx_Output')
+
+                df.to_excel(
+                    writer,
+                    index=False,
+                    sheet_name='ImaEx_Output'
+                )
 
                 ws = writer.book['ImaEx_Output']
 
@@ -242,7 +291,10 @@ if uploaded_files:
                 )
 
                 for cell in ws[1]:
-                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.font = Font(
+                        bold=True,
+                        color="FFFFFF"
+                    )
                     cell.fill = fill
 
             st.download_button(
