@@ -179,24 +179,26 @@ def extract_numbers(file):
 
     if results:
 
-        for item in results:
+        # FULL TEXT BUILD
+        all_text = " ".join([item[1] for item in results])
+
+        # FIND ALL 10 DIGIT NUMBERS
+        numbers = re.findall(r'\d{10}', all_text)
+
+        # REMOVE DUPLICATES
+        numbers = list(dict.fromkeys(numbers))
+
+        for cleaned in numbers:
 
             try:
-                text = item[1]
-
-                cleaned = re.sub(r'\D', '', text)
-
-                if len(cleaned) == 10:
-
-                    number_sum = calculate_sum(cleaned)
-
-                    extracted.append({
-                        "Extracted Number": cleaned,
-                        "Number Sum": number_sum
-                    })
-
+                number_sum = calculate_sum(cleaned)
             except:
-                pass
+                number_sum = "NA"
+
+            extracted.append({
+                "Extracted Number": cleaned,
+                "Number Sum": number_sum
+            })
 
     return extracted
 
@@ -296,6 +298,16 @@ if uploaded_files:
                         color="FFFFFF"
                     )
                     cell.fill = fill
+
+                for column_cells in ws.columns:
+                    length = max(
+                        len(str(cell.value)) if cell.value else 0
+                        for cell in column_cells
+                    )
+
+                    ws.column_dimensions[
+                        column_cells[0].column_letter
+                    ].width = length + 6
 
             st.download_button(
                 label="⬇ Download Excel File",
