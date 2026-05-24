@@ -118,7 +118,7 @@ def extract_numbers_from_image(client, image_file):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash",
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
                 OCR_PROMPT
