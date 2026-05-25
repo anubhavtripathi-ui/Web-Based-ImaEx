@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import easyocr
+import pytesseract
 import numpy as np
 from PIL import Image
 import io
@@ -10,15 +10,7 @@ st.set_page_config(page_title="AI Mobile Number Extractor", page_icon="📱", la
 
 # App Title
 st.title("📱 AI Vertical Column Mobile Number Extractor")
-st.write("Upload your images (maximum 30). This tool automatically detects vertical columns and extracts 10-digit mobile numbers without requiring a fixed grid or layout pattern.")
-
-# Cache the OCR Reader so it doesn't reload on every interaction
-@st.cache_resource
-def load_ocr_reader():
-    # 'en' language works best for standard digital fonts
-    return easyocr.Reader(['en'], gpu=False)
-
-reader = load_ocr_reader()
+st.write("Upload your images (maximum 30). This tool automatically detects vertical columns and extracts mobile numbers without requiring a fixed grid or layout pattern.")
 
 def calculate_digital_root(number_str):
     """Calculates the single-digit sum (Digital Root) of a 10-digit number."""
@@ -32,37 +24,47 @@ def calculate_digital_root(number_str):
 
 def process_image(image_file):
     """Processes the image, groups numbers into vertical columns, and extracts data."""
-    # Convert uploaded file to PIL Image and then to a numpy array
+    # Convert uploaded file to PIL Image
     image = Image.open(image_file).convert('RGB')
-    image_np = np.array(image)
     img_width, _ = image.size
 
-    # Run EasyOCR
-    results = reader.readtext(image_np)
+    # Run Tesseract OCR with detailed structural data layout
+    try:
+        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    except Exception as e:
+        st.error(f"OCR Engine Error: Please ensure 'packages.txt' is added to GitHub. Details: {e}")
+        return []
     
     blocks = []
-    for res in results:
-        bbox, text, prob = res
-        # Calculate center X and Y coordinates of the text block
-        cx = sum([p[0] for p in bbox]) / 4
-        cy = sum([p[1] for p in bbox]) / 4
-        
+    n_boxes = len(data['text'])
+    
+    for i in range(n_boxes):
+        text = data['text'][i].strip()
         # Clean text to retain only digits
         clean_digits = "".join([c for c in text if c.isdigit()])
         
-        if len(clean_digits) >= 5:  # Filter out small irrelevant noise/numbers
+        # Filter out tiny standalone noise numbers
+        if len(clean_digits) >= 5:  
+            # Extract coordinates to find centers
+            x = data['left'][i]
+            y = data['top'][i]
+            w = data['width'][i]
+            h = data['height'][i]
+            
+            cx = x + w / 2
+            cy = y + h / 2
             blocks.append({'cx': cx, 'cy': cy, 'digits': clean_digits})
             
     if not blocks:
         return []
 
     # Dynamic Column Clustering Heuristic
-    # Sort blocks primarily by X coordinate to map out columns
+    # Sort blocks primarily by X coordinate to map out separate columns
     blocks.sort(key=lambda b: b['cx'])
     columns = []
     current_col = [blocks[0]]
     
-    # 10% of image width is used as a threshold to group elements into the same column
+    # 10% of image width used as a threshold boundary to distinguish columns
     col_threshold = img_width * 0.10 
 
     for b in blocks[1:]:
@@ -82,10 +84,10 @@ def process_image(image_file):
             num = b['digits']
             if len(num) == 10:
                 digit_sum = calculate_digital_root(num)
-                extracted_data.append({"Mobile Number": num, "Single Digit Sum": digit_sum})
+                extracted_data.append({"Mobile Number": num, "Sum": digit_sum})
             else:
                 # Logic for unclear, incomplete, or broken numbers
-                extracted_data.append({"Mobile Number": num, "Single Digit Sum": "NA"})
+                extracted_data.append({"Mobile Number": num, "Sum": "NA"})
                 
     return extracted_data
 
@@ -113,8 +115,16 @@ if uploaded_files:
                 progress_bar.progress((index + 1) / len(uploaded_files))
                 
             if all_records:
-                # Create DataFrame
-                df = pd.DataFrame(all_records)
+                # Build final sequential data format matching user template
+                final_structured_data = []
+                for idx, record in enumerate(all_records, start=1):
+                    final_structured_data.append({
+                        "S No": idx,
+                        "Mobile Number": record["Mobile Number"],
+                        "Sum": record["Sum"]
+                    })
+                
+                df = pd.DataFrame(final_structured_data)
                 
                 st.write("---")
                 st.subheader("📊 Extracted Data Preview")
