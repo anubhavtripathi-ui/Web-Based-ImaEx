@@ -1,5 +1,8 @@
 streamlit
+easyocr
 pandas
-google-genai
-pillow
 openpyxl
+numpy
+PIL
+torchvision
+torch
